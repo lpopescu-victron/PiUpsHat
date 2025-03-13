@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Battery Tray for Waveshare UPS HAT on Raspberry Pi
-# Displays battery SOC in system tray and runs at boot (X11).
+# Displays battery SOC in system tray and runs at boot (Wayland).
 
 import sys
 import time
@@ -18,7 +18,7 @@ def install_dependencies():
     subprocess.run(["apt-get", "update"], check=True)
     subprocess.run([
         "apt-get", "install", "-y",
-        "python3", "python3-pip", "python3-pyqt5", "i2c-tools", "p7zip", "git", "lxde-icon-theme"
+        "python3", "python3-pip", "python3-pyqt5", "i2c-tools", "p7zip", "git", "tango-icon-theme"
     ], check=True)
     subprocess.run(["pip3", "install", "smbus2"], check=True)
     i2c_status = subprocess.run(["raspi-config", "nonint", "get_i2c"], capture_output=True, text=True)
@@ -41,10 +41,12 @@ except ImportError:
     from PyQt5.QtGui import QIcon
     import smbus2 as smbus
 
-os.environ["QT_QPA_PLATFORM"] = "xcb"
+# Use Wayland backend
+os.environ["QT_QPA_PLATFORM"] = "wayland"
+os.environ["QT_LOGGING_RULES"] = "*.debug=true"  # Enable Qt debug output
 if "DISPLAY" not in os.environ:
-    os.environ["DISPLAY"] = ":0"
-print(f"DISPLAY set to: {os.environ['DISPLAY']}")
+    os.environ["DISPLAY"] = ":0"  # Fallback, though Wayland might ignore this
+print(f"DISPLAY set to: {os.environ['DISPLAY']}, Platform: {os.environ['QT_QPA_PLATFORM']}")
 
 INA219_ADDRESS = 0x42
 INA219_REG_CONFIG = 0x00
@@ -92,8 +94,12 @@ class INA219:
 class BatteryTray:
     def __init__(self):
         print("Initializing BatteryTray...")
-        self.app = QApplication(sys.argv)
-        print("QApplication initialized")
+        try:
+            self.app = QApplication(sys.argv)
+            print("QApplication initialized")
+        except Exception as e:
+            print(f"QApplication failed: {e}")
+            raise
         self.tray = QSystemTrayIcon()
         self.ina219 = INA219()
         self.update_icon()
