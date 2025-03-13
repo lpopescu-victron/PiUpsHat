@@ -9,7 +9,6 @@ import os
 import subprocess
 import argparse
 
-# Install dependencies and enable I2C
 def install_dependencies():
     print("Installing dependencies...")
     if os.geteuid() != 0:
@@ -24,11 +23,11 @@ def install_dependencies():
     subprocess.run(["pip3", "install", "smbus2"], check=True)
     i2c_status = subprocess.run(["raspi-config", "nonint", "get_i2c"], capture_output=True, text=True)
     if i2c_status.stdout.strip() != "0":
-        print("Enabling I2C...")
+        print("Enabling I2C and rebooting...")
         subprocess.run(["raspi-config", "nonint", "do_i2c", "0"], check=True)
+        subprocess.run(["reboot"], check=True)  # Reboot to apply I2C
     print("Setup complete.")
 
-# Check and install dependencies if missing
 try:
     from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu
     from PyQt5.QtGui import QIcon
@@ -39,12 +38,10 @@ except ImportError:
     from PyQt5.QtGui import QIcon
     import smbus2 as smbus
 
-# Set DISPLAY if not set (for GUI)
 if "DISPLAY" not in os.environ:
     os.environ["DISPLAY"] = ":0"
 
-# INA219 I2C address and registers
-INA219_ADDRESS = 0x40
+INA219_ADDRESS = 0x40  # Adjust if i2cdetect shows a different address
 INA219_REG_CONFIG = 0x00
 INA219_REG_SHUNTVOLTAGE = 0x01
 INA219_REG_BUSVOLTAGE = 0x02
@@ -52,7 +49,6 @@ INA219_REG_POWER = 0x03
 INA219_REG_CURRENT = 0x04
 INA219_REG_CALIBRATION = 0x05
 
-# Configuration settings
 CONFIG_VALUE = 0x199F
 CALIBRATION_VALUE = 4096
 
@@ -82,7 +78,7 @@ class INA219:
 
     def get_current(self):
         raw = self.read_word(INA219_REG_CURRENT)
-        if raw > 32767:  # Handle negative
+        if raw > 32767:
             raw -= 65536
         return raw * self._current_lsb
 
@@ -91,7 +87,6 @@ class INA219:
         return raw * self._power_lsb
 
     def get_capacity(self):
-        # Estimate SOC: 100% at 4.2V, 0% at 3.0V
         voltage = self.get_bus_voltage()
         if voltage >= 4.2:
             return 100
