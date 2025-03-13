@@ -41,12 +41,16 @@ except ImportError:
     from PyQt5.QtGui import QIcon
     import smbus2 as smbus
 
-# Use Wayland backend
+# Configure for Wayland
 os.environ["QT_QPA_PLATFORM"] = "wayland"
 os.environ["QT_LOGGING_RULES"] = "*.debug=true"  # Enable Qt debug output
-if "DISPLAY" not in os.environ:
-    os.environ["DISPLAY"] = ":0"  # Fallback, though Wayland might ignore this
-print(f"DISPLAY set to: {os.environ['DISPLAY']}, Platform: {os.environ['QT_QPA_PLATFORM']}")
+# Use WAYLAND_DISPLAY if set, otherwise default to wayland-0
+if "WAYLAND_DISPLAY" not in os.environ:
+    os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+# Unset DISPLAY to avoid X11 confusion
+if "DISPLAY" in os.environ:
+    del os.environ["DISPLAY"]
+print(f"WAYLAND_DISPLAY set to: {os.environ['WAYLAND_DISPLAY']}, Platform: {os.environ['QT_QPA_PLATFORM']}")
 
 INA219_ADDRESS = 0x42
 INA219_REG_CONFIG = 0x00
@@ -140,19 +144,31 @@ class BatteryTray:
 
 def setup_autostart():
     script_path = os.path.abspath(__file__)
-    autostart_dir = os.path.expanduser("~/.config/lxsession/LXDE-pi")
-    autostart_file = os.path.join(autostart_dir, "autostart")
+    # Use systemd for Wayland autostart (LXDE path is X11-specific)
+    autostart_dir = os.path.expanduser("~/.config/systemd/user")
+    autostart_file = os.path.join(autostart_dir, "battery-tray.service")
     if not os.path.exists(autostart_dir):
         os.makedirs(autostart_dir)
-    entry = f"@python3 {script_path}"
-    if os.path.exists(autostart_file):
-        with open(autostart_file, "r") as f:
-            if entry in f.read():
-                print("Autostart already configured.")
-                return
-    with open(autostart_file, "a") as f:
-        f.write(f"{entry}\n")
-    print(f"Autostart enabled: {script_path}")
+    service_content = f"""[Unit]
+Description=Battery Tray for UPS HAT
+After=graphical.target
+
+[Service]
+ExecStart=/usr/bin/python3 {script_path}
+Restart=always
+Environment="WAYLAND_DISPLAY=wayland-0"
+Environment="QT_QPA_PLATFORM=wayland"
+
+[Install]
+WantedBy=default.target
+"""
+    if not os.path.exists(autostart_file):
+        with open(autostart_file, "w") as f:
+            f.write(service_content)
+        subprocess.run(["systemctl", "--user", "enable", "battery-tray.service"])
+        print(f"Autostart enabled via systemd: {autostart_file}")
+    else:
+        print("Autostart already configured via systemd.")
 
 if __name__ == "__main__":
     setup_autostart()
