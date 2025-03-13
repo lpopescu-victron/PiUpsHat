@@ -25,7 +25,7 @@ def install_dependencies():
     if i2c_status.stdout.strip() != "0":
         print("Enabling I2C and rebooting...")
         subprocess.run(["raspi-config", "nonint", "do_i2c", "0"], check=True)
-        subprocess.run(["reboot"], check=True)  # Reboot to apply I2C
+        subprocess.run(["reboot"], check=True)
     print("Setup complete.")
 
 try:
@@ -41,7 +41,7 @@ except ImportError:
 if "DISPLAY" not in os.environ:
     os.environ["DISPLAY"] = ":0"
 
-INA219_ADDRESS = 0x40  # Adjust if i2cdetect shows a different address
+INA219_ADDRESS = 0x42  # Updated to match your UPS HAT
 INA219_REG_CONFIG = 0x00
 INA219_REG_SHUNTVOLTAGE = 0x01
 INA219_REG_BUSVOLTAGE = 0x02
