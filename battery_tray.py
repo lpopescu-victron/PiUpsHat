@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 # Battery Tray for Waveshare UPS HAT on Raspberry Pi
-# Displays battery SOC, voltage, and current in system tray.
-# Installs dependencies on first run. Use --install-autostart for boot.
+# Displays battery SOC in system tray and runs at boot.
 
 import sys
 import time
 import os
 import subprocess
-import argparse
 
 def install_dependencies():
     print("Installing dependencies...")
@@ -40,47 +38,27 @@ except ImportError:
     import smbus2 as smbus
 
 if "DISPLAY" not in os.environ:
-    os.environ["DISPLAY"] = ":0"  # Default to local display if unset
+    os.environ["DISPLAY"] = ":0"
 
-INA219_ADDRESS = 0x42  # Matches your i2cdetect output
+INA219_ADDRESS = 0x42
 INA219_REG_CONFIG = 0x00
-INA219_REG_SHUNTVOLTAGE = 0x01
 INA219_REG_BUSVOLTAGE = 0x02
-INA219_REG_POWER = 0x03
-INA219_REG_CURRENT = 0x04
 INA219_REG_CALIBRATION = 0x05
 
-CONFIG_VALUE = 0x199F
+CONFIG_VALUE = 0x19FF  # Updated to match example (32V, Gain 8, 12-bit 32 samples)
 CALIBRATION_VALUE = 4096
 
 class INA219:
     def __init__(self, i2c_bus=1, addr=INA219_ADDRESS):
-        print(f"Initializing I2C on bus {i2c_bus} at address {hex(addr)}")
-        try:
-            self.bus = smbus.SMBus(i2c_bus)
-            print("I2C bus opened successfully")
-        except Exception as e:
-            print(f"Failed to open I2C bus: {e}")
-            raise
+        self.bus = smbus.SMBus(i2c_bus)
         self.addr = addr
         self._cal_value = CALIBRATION_VALUE
-        self._current_lsb = 0
-        self._power_lsb = 0
-        time.sleep(0.1)  # Delay to stabilize I2C
+        time.sleep(0.1)
         self.set_calibration()
 
     def set_calibration(self):
-        self._current_lsb = 0.1  # 100uA per bit
-        self._power_lsb = 2  # 2mW per bit
-        try:
-            print(f"Writing calibration value {self._cal_value} to {hex(self.addr)}")
-            self.bus.write_word_data(self.addr, INA219_REG_CALIBRATION, self._cal_value)
-            print(f"Writing config value {CONFIG_VALUE} to {hex(self.addr)}")
-            self.bus.write_word_data(self.addr, INA219_REG_CONFIG, CONFIG_VALUE)
-            print("Calibration successful")
-        except Exception as e:
-            print(f"I2C write failed: {e}")
-            raise
+        self.bus.write_word_data(self.addr, INA219_REG_CALIBRATION, self._cal_value)
+        self.bus.write_word_data(self.addr, INA219_REG_CONFIG, CONFIG_VALUE)
 
     def read_word(self, reg):
         high = self.bus.read_byte_data(self.addr, reg)
@@ -89,30 +67,21 @@ class INA219:
 
     def get_bus_voltage(self):
         raw = self.read_word(INA219_REG_BUSVOLTAGE)
-        return (raw >> 3) * 0.004  # 4mV per bit
-
-    def get_current(self):
-        raw = self.read_word(INA219_REG_CURRENT)
-        if raw > 32767:
-            raw -= 65536
-        return raw * self._current_lsb
-
-    def get_power(self):
-        raw = self.read_word(INA219_REG_POWER)
-        return raw * self._power_lsb
+        voltage = (raw >> 3) * 0.004  # 4mV per bit
+        return voltage
 
     def get_capacity(self):
         voltage = self.get_bus_voltage()
-        if voltage >= 4.2:
-            return 100
-        elif voltage <= 3.0:
-            return 0
-        else:
-            return int(((voltage - 3.0) / (4.2 - 3.0)) * 100)
+        capacity = (voltage - 6) / 2.4 * 100  # 2S logic: 6V (0%), 8.4V (100%)
+        if capacity > 100:
+            capacity = 100
+        if capacity < 0:
+            capacity = 0
+        print(f"Voltage: {voltage:.2f}V, Capacity: {capacity:.1f}%")
+        return capacity
 
 class BatteryTray:
     def __init__(self):
-        print("Starting BatteryTray...")
         self.app = QApplication(sys.argv)
         self.tray = QSystemTrayIcon()
         self.ina219 = INA219()
@@ -122,13 +91,11 @@ class BatteryTray:
         quit_action = menu.addAction("Quit")
         quit_action.triggered.connect(self.quit)
         self.tray.setContextMenu(menu)
-        self.timer = self.app.startTimer(5000)
+        self.timer = self.app.startTimer(5000)  # Update every 5 seconds
         self.app.timerEvent = self.update_icon
 
     def update_icon(self, event=None):
         capacity = self.ina219.get_capacity()
-        voltage = self.ina219.get_bus_voltage()
-        current = self.ina219.get_current()
         if capacity > 75:
             icon = QIcon.fromTheme("battery-full")
         elif capacity > 50:
@@ -137,12 +104,11 @@ class BatteryTray:
             icon = QIcon.fromTheme("battery-low")
         else:
             icon = QIcon.fromTheme("battery-caution")
-        self.tray.setIcon(icon)
-        self.tray.setToolTip(f"Battery: {capacity}% | {voltage:.2f}V | {current:.2f}mA")
-        if capacity < 5:
-            self.tray.showMessage("Low Battery", "Shutting down...", QSystemTrayIcon.Warning)
-            time.sleep(5)
-            os.system("sudo shutdown -h now")
+        if not icon.isNull():
+            self.tray.setIcon(icon)
+        else:
+            print("Warning: No icon available")
+        self.tray.setToolTip(f"Battery: {capacity:.1f}%")
 
     def quit(self):
         self.app.quit()
@@ -150,7 +116,7 @@ class BatteryTray:
     def run(self):
         sys.exit(self.app.exec_())
 
-def install_autostart():
+def setup_autostart():
     script_path = os.path.abspath(__file__)
     autostart_dir = os.path.expanduser("~/.config/lxsession/LXDE-pi")
     autostart_file = os.path.join(autostart_dir, "autostart")
@@ -167,11 +133,6 @@ def install_autostart():
     print(f"Autostart enabled: {script_path}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Battery Tray for UPS HAT")
-    parser.add_argument("--install-autostart", action="store_true", help="Run at boot")
-    args = parser.parse_args()
-    if args.install_autostart:
-        install_autostart()
-    else:
-        tray = BatteryTray()
-        tray.run()
+    setup_autostart()  # Set up autostart on first run
+    tray = BatteryTray()
+    tray.run()
