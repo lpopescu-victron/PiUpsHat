@@ -39,6 +39,10 @@ except ImportError:
     from PyQt5.QtGui import QIcon
     import smbus2 as smbus
 
+# Set DISPLAY if not set (for GUI)
+if "DISPLAY" not in os.environ:
+    os.environ["DISPLAY"] = ":0"
+
 # INA219 I2C address and registers
 INA219_ADDRESS = 0x40
 INA219_REG_CONFIG = 0x00
