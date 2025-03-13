@@ -26,7 +26,8 @@ def install_dependencies():
         print("Enabling I2C and rebooting...")
         subprocess.run(["raspi-config", "nonint", "do_i2c", "0"], check=True)
         subprocess.run(["reboot"], check=True)
-    print("Setup complete.")
+    subprocess.run(["usermod", "-aG", "i2c", "pi"], check=True)
+    print("Setup complete. Reboot might be needed for I2C permissions.")
 
 try:
     from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu
@@ -39,9 +40,9 @@ except ImportError:
     import smbus2 as smbus
 
 if "DISPLAY" not in os.environ:
-    os.environ["DISPLAY"] = ":0"
+    os.environ["DISPLAY"] = ":0"  # Default to local display if unset
 
-INA219_ADDRESS = 0x42  # Updated to match your UPS HAT
+INA219_ADDRESS = 0x42  # Matches your i2cdetect output
 INA219_REG_CONFIG = 0x00
 INA219_REG_SHUNTVOLTAGE = 0x01
 INA219_REG_BUSVOLTAGE = 0x02
@@ -54,18 +55,32 @@ CALIBRATION_VALUE = 4096
 
 class INA219:
     def __init__(self, i2c_bus=1, addr=INA219_ADDRESS):
-        self.bus = smbus.SMBus(i2c_bus)
+        print(f"Initializing I2C on bus {i2c_bus} at address {hex(addr)}")
+        try:
+            self.bus = smbus.SMBus(i2c_bus)
+            print("I2C bus opened successfully")
+        except Exception as e:
+            print(f"Failed to open I2C bus: {e}")
+            raise
         self.addr = addr
         self._cal_value = CALIBRATION_VALUE
         self._current_lsb = 0
         self._power_lsb = 0
+        time.sleep(0.1)  # Delay to stabilize I2C
         self.set_calibration()
 
     def set_calibration(self):
         self._current_lsb = 0.1  # 100uA per bit
         self._power_lsb = 2  # 2mW per bit
-        self.bus.write_word_data(self.addr, INA219_REG_CALIBRATION, self._cal_value)
-        self.bus.write_word_data(self.addr, INA219_REG_CONFIG, CONFIG_VALUE)
+        try:
+            print(f"Writing calibration value {self._cal_value} to {hex(self.addr)}")
+            self.bus.write_word_data(self.addr, INA219_REG_CALIBRATION, self._cal_value)
+            print(f"Writing config value {CONFIG_VALUE} to {hex(self.addr)}")
+            self.bus.write_word_data(self.addr, INA219_REG_CONFIG, CONFIG_VALUE)
+            print("Calibration successful")
+        except Exception as e:
+            print(f"I2C write failed: {e}")
+            raise
 
     def read_word(self, reg):
         high = self.bus.read_byte_data(self.addr, reg)
@@ -97,6 +112,7 @@ class INA219:
 
 class BatteryTray:
     def __init__(self):
+        print("Starting BatteryTray...")
         self.app = QApplication(sys.argv)
         self.tray = QSystemTrayIcon()
         self.ina219 = INA219()
