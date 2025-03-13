@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # Battery Tray for Waveshare UPS HAT on Raspberry Pi
-# Displays battery SOC in system tray and runs at boot.
+# Displays battery SOC in system tray and runs at boot (X11).
 
 import sys
 import time
 import os
 import subprocess
+
+print("Starting script...")
 
 def install_dependencies():
     print("Installing dependencies...")
@@ -16,7 +18,7 @@ def install_dependencies():
     subprocess.run(["apt-get", "update"], check=True)
     subprocess.run([
         "apt-get", "install", "-y",
-        "python3", "python3-pip", "python3-pyqt5", "i2c-tools", "p7zip", "git"
+        "python3", "python3-pip", "python3-pyqt5", "i2c-tools", "p7zip", "git", "lxde-icon-theme"
     ], check=True)
     subprocess.run(["pip3", "install", "smbus2"], check=True)
     i2c_status = subprocess.run(["raspi-config", "nonint", "get_i2c"], capture_output=True, text=True)
@@ -28,37 +30,44 @@ def install_dependencies():
     print("Setup complete. Reboot might be needed for I2C permissions.")
 
 try:
+    print("Importing PyQt5 and smbus2...")
     from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu
     from PyQt5.QtGui import QIcon
     import smbus2 as smbus
 except ImportError:
     install_dependencies()
+    print("Retrying imports after installation...")
     from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu
     from PyQt5.QtGui import QIcon
     import smbus2 as smbus
 
+os.environ["QT_QPA_PLATFORM"] = "xcb"
 if "DISPLAY" not in os.environ:
     os.environ["DISPLAY"] = ":0"
+print(f"DISPLAY set to: {os.environ['DISPLAY']}")
 
 INA219_ADDRESS = 0x42
 INA219_REG_CONFIG = 0x00
 INA219_REG_BUSVOLTAGE = 0x02
 INA219_REG_CALIBRATION = 0x05
 
-CONFIG_VALUE = 0x19FF  # Updated to match example (32V, Gain 8, 12-bit 32 samples)
+CONFIG_VALUE = 0x19FF
 CALIBRATION_VALUE = 4096
 
 class INA219:
     def __init__(self, i2c_bus=1, addr=INA219_ADDRESS):
+        print(f"Initializing INA219 on bus {i2c_bus}, address {hex(addr)}")
         self.bus = smbus.SMBus(i2c_bus)
         self.addr = addr
         self._cal_value = CALIBRATION_VALUE
-        time.sleep(0.1)
         self.set_calibration()
+        time.sleep(0.5)
 
     def set_calibration(self):
+        print("Setting calibration...")
         self.bus.write_word_data(self.addr, INA219_REG_CALIBRATION, self._cal_value)
         self.bus.write_word_data(self.addr, INA219_REG_CONFIG, CONFIG_VALUE)
+        print("Calibration set")
 
     def read_word(self, reg):
         high = self.bus.read_byte_data(self.addr, reg)
@@ -67,12 +76,12 @@ class INA219:
 
     def get_bus_voltage(self):
         raw = self.read_word(INA219_REG_BUSVOLTAGE)
-        voltage = (raw >> 3) * 0.004  # 4mV per bit
+        voltage = (raw >> 3) * 0.004
         return voltage
 
     def get_capacity(self):
         voltage = self.get_bus_voltage()
-        capacity = (voltage - 6) / 2.4 * 100  # 2S logic: 6V (0%), 8.4V (100%)
+        capacity = (voltage - 6) / 2.4 * 100
         if capacity > 100:
             capacity = 100
         if capacity < 0:
@@ -82,19 +91,23 @@ class INA219:
 
 class BatteryTray:
     def __init__(self):
+        print("Initializing BatteryTray...")
         self.app = QApplication(sys.argv)
+        print("QApplication initialized")
         self.tray = QSystemTrayIcon()
         self.ina219 = INA219()
         self.update_icon()
         self.tray.show()
+        print("Tray shown")
         menu = QMenu()
         quit_action = menu.addAction("Quit")
         quit_action.triggered.connect(self.quit)
         self.tray.setContextMenu(menu)
-        self.timer = self.app.startTimer(5000)  # Update every 5 seconds
+        self.timer = self.app.startTimer(5000)
         self.app.timerEvent = self.update_icon
 
     def update_icon(self, event=None):
+        print("Updating icon...")
         capacity = self.ina219.get_capacity()
         if capacity > 75:
             icon = QIcon.fromTheme("battery-full")
@@ -106,14 +119,17 @@ class BatteryTray:
             icon = QIcon.fromTheme("battery-caution")
         if not icon.isNull():
             self.tray.setIcon(icon)
+            print("Icon set")
         else:
-            print("Warning: No icon available")
+            self.tray.setIcon(QIcon.fromTheme("battery-missing"))
+            print("Warning: Using fallback icon")
         self.tray.setToolTip(f"Battery: {capacity:.1f}%")
 
     def quit(self):
         self.app.quit()
 
     def run(self):
+        print("Running application...")
         sys.exit(self.app.exec_())
 
 def setup_autostart():
@@ -133,6 +149,6 @@ def setup_autostart():
     print(f"Autostart enabled: {script_path}")
 
 if __name__ == "__main__":
-    setup_autostart()  # Set up autostart on first run
+    setup_autostart()
     tray = BatteryTray()
     tray.run()
