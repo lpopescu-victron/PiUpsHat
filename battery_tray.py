@@ -1,14 +1,46 @@
+#!/usr/bin/env python3
+# Battery Tray for Waveshare UPS HAT on Raspberry Pi
+# Displays battery SOC, voltage, and current in system tray.
+# Installs dependencies on first run. Use --install-autostart for boot.
+
 import sys
 import time
-from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PyQt5.QtGui import QIcon
-import smbus2 as smbus
 import os
+import subprocess
+import argparse
 
-# INA219 I2C address (default 0x40, adjust via i2cdetect -y 1 if different)
+# Install dependencies and enable I2C
+def install_dependencies():
+    print("Installing dependencies...")
+    if os.geteuid() != 0:
+        print("Needs sudo for installation.")
+        subprocess.run(["sudo", sys.executable] + sys.argv)
+        sys.exit(0)
+    subprocess.run(["apt-get", "update"], check=True)
+    subprocess.run([
+        "apt-get", "install", "-y",
+        "python3", "python3-pip", "python3-pyqt5", "i2c-tools", "p7zip", "git"
+    ], check=True)
+    subprocess.run(["pip3", "install", "smbus2"], check=True)
+    i2c_status = subprocess.run(["raspi-config", "nonint", "get_i2c"], capture_output=True, text=True)
+    if i2c_status.stdout.strip() != "0":
+        print("Enabling I2C...")
+        subprocess.run(["raspi-config", "nonint", "do_i2c", "0"], check=True)
+    print("Setup complete.")
+
+# Check and install dependencies if missing
+try:
+    from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+    from PyQt5.QtGui import QIcon
+    import smbus2 as smbus
+except ImportError:
+    install_dependencies()
+    from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+    from PyQt5.QtGui import QIcon
+    import smbus2 as smbus
+
+# INA219 I2C address and registers
 INA219_ADDRESS = 0x40
-
-# INA219 register addresses
 INA219_REG_CONFIG = 0x00
 INA219_REG_SHUNTVOLTAGE = 0x01
 INA219_REG_BUSVOLTAGE = 0x02
@@ -16,12 +48,11 @@ INA219_REG_POWER = 0x03
 INA219_REG_CURRENT = 0x04
 INA219_REG_CALIBRATION = 0x05
 
-# Configuration settings (from Waveshare demo)
-CONFIG_VALUE = 0x199F  # Default config
-CALIBRATION_VALUE = 4096  # Default calibration
+# Configuration settings
+CONFIG_VALUE = 0x199F
+CALIBRATION_VALUE = 4096
 
 class INA219:
-    """Class to interface with INA219 sensor on UPS HAT."""
     def __init__(self, i2c_bus=1, addr=INA219_ADDRESS):
         self.bus = smbus.SMBus(i2c_bus)
         self.addr = addr
@@ -31,38 +62,32 @@ class INA219:
         self.set_calibration()
 
     def set_calibration(self):
-        """Configure INA219 calibration and settings."""
-        self._current_lsb = 0.1  # Current LSB = 100uA per bit
-        self._power_lsb = 2  # Power LSB = 2mW per bit
+        self._current_lsb = 0.1  # 100uA per bit
+        self._power_lsb = 2  # 2mW per bit
         self.bus.write_word_data(self.addr, INA219_REG_CALIBRATION, self._cal_value)
         self.bus.write_word_data(self.addr, INA219_REG_CONFIG, CONFIG_VALUE)
 
     def read_word(self, reg):
-        """Read 16-bit word from INA219 register."""
         high = self.bus.read_byte_data(self.addr, reg)
         low = self.bus.read_byte_data(self.addr, reg + 1)
         return (high << 8) + low
 
     def get_bus_voltage(self):
-        """Get battery voltage in volts."""
         raw = self.read_word(INA219_REG_BUSVOLTAGE)
         return (raw >> 3) * 0.004  # 4mV per bit
 
     def get_current(self):
-        """Get current in mA."""
         raw = self.read_word(INA219_REG_CURRENT)
-        if raw > 32767:  # Handle negative values
+        if raw > 32767:  # Handle negative
             raw -= 65536
         return raw * self._current_lsb
 
     def get_power(self):
-        """Get power in mW."""
         raw = self.read_word(INA219_REG_POWER)
         return raw * self._power_lsb
 
     def get_capacity(self):
-        """Estimate battery capacity (SOC) as percentage.
-        Assumes 100% at 4.2V, 0% at 3.0V. Adjust for your battery."""
+        # Estimate SOC: 100% at 4.2V, 0% at 3.0V
         voltage = self.get_bus_voltage()
         if voltage >= 4.2:
             return 100
@@ -72,31 +97,23 @@ class INA219:
             return int(((voltage - 3.0) / (4.2 - 3.0)) * 100)
 
 class BatteryTray:
-    """System tray icon for UPS HAT battery status."""
     def __init__(self):
         self.app = QApplication(sys.argv)
         self.tray = QSystemTrayIcon()
         self.ina219 = INA219()
         self.update_icon()
         self.tray.show()
-
-        # Context menu for right-click
         menu = QMenu()
         quit_action = menu.addAction("Quit")
         quit_action.triggered.connect(self.quit)
         self.tray.setContextMenu(menu)
-
-        # Update every 5 seconds
         self.timer = self.app.startTimer(5000)
         self.app.timerEvent = self.update_icon
 
     def update_icon(self, event=None):
-        """Update tray icon and tooltip with battery data."""
         capacity = self.ina219.get_capacity()
         voltage = self.ina219.get_bus_voltage()
         current = self.ina219.get_current()
-
-        # Select icon based on capacity
         if capacity > 75:
             icon = QIcon.fromTheme("battery-full")
         elif capacity > 50:
@@ -105,24 +122,41 @@ class BatteryTray:
             icon = QIcon.fromTheme("battery-low")
         else:
             icon = QIcon.fromTheme("battery-caution")
-
         self.tray.setIcon(icon)
         self.tray.setToolTip(f"Battery: {capacity}% | {voltage:.2f}V | {current:.2f}mA")
-
-        # Optional: Shutdown at low battery (comment out if not needed)
         if capacity < 5:
             self.tray.showMessage("Low Battery", "Shutting down...", QSystemTrayIcon.Warning)
             time.sleep(5)
             os.system("sudo shutdown -h now")
 
     def quit(self):
-        """Exit the application."""
         self.app.quit()
 
     def run(self):
-        """Start the application loop."""
         sys.exit(self.app.exec_())
 
+def install_autostart():
+    script_path = os.path.abspath(__file__)
+    autostart_dir = os.path.expanduser("~/.config/lxsession/LXDE-pi")
+    autostart_file = os.path.join(autostart_dir, "autostart")
+    if not os.path.exists(autostart_dir):
+        os.makedirs(autostart_dir)
+    entry = f"@python3 {script_path}"
+    if os.path.exists(autostart_file):
+        with open(autostart_file, "r") as f:
+            if entry in f.read():
+                print("Autostart already configured.")
+                return
+    with open(autostart_file, "a") as f:
+        f.write(f"{entry}\n")
+    print(f"Autostart enabled: {script_path}")
+
 if __name__ == "__main__":
-    tray = BatteryTray()
-    tray.run()
+    parser = argparse.ArgumentParser(description="Battery Tray for UPS HAT")
+    parser.add_argument("--install-autostart", action="store_true", help="Run at boot")
+    args = parser.parse_args()
+    if args.install_autostart:
+        install_autostart()
+    else:
+        tray = BatteryTray()
+        tray.run()
